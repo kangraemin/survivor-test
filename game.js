@@ -264,9 +264,11 @@ class Play extends Phaser.Scene {
     }
     // 걸을 때 위아래로 튀고 진행 방향으로 살짝 기울기, 서 있으면 숨쉬기
     this.walkT = (this.walkT || 0) + delta * (moving ? 0.018 : 0.004);
-    const bob = moving ? Math.abs(Math.sin(this.walkT)) * 0.06 : 0;
+    const bob = moving ? Math.abs(Math.sin(this.walkT)) * 0.08 : 0;
     this.hero.setOrigin(0.5, 0.5 + bob);
-    this.hero.setAngle(slashing ? 0 : v.x * 6);
+    // 앞·뒷모습은 그림의 다리 움직임이 작아서, 걸음마다 좌우로 몸을 흔들어 발걸음을 보이게 한다
+    const rock = moving && !slashing && this.hero.anims.currentAnim?.key !== 'walkSide' ? Math.sin(this.walkT) * 8 : 0;
+    this.hero.setAngle(slashing ? 0 : rock + v.x * 4);
     this.hero.setScale(1, moving ? 1 : 1 + Math.sin(this.walkT) * 0.025);
     if (moving && time - (this.lastDust || 0) > 170) {
       this.lastDust = time;
