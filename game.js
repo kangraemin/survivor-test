@@ -3,7 +3,7 @@ const W = 270, H = 480, WORLD = 1600;
 
 class Play extends Phaser.Scene {
   preload() {
-    for (const k of ['hero_r0', 'hero_r1', 'hero_r2', 'mob_r0', 'mob_r1', 'mob_r2']) this.load.image(k, `assets/${k}.png`);
+    for (const k of ['hero_r0', 'hero_r1', 'hero_r2', 'hero2_r0', 'hero2_r1', 'hero2_r2', 'fx1_r0', 'fx1_r1', 'fx1_r2', 'fx2_r0', 'mob2_r0', 'mob2_r1', 'mob2_r2', 'mob_r0', 'mob_r1', 'mob_r2']) this.load.image(k, `assets/${k}.png`);
     this.load.image('tiles', 'assets/tiles.png');
     this.load.image('deco', 'assets/deco.png');
   }
@@ -19,7 +19,23 @@ class Play extends Phaser.Scene {
       this.anims.create({ key, frames: this.anims.generateFrameNumbers(sheet), frameRate: rate, repeat });
     A('walkDown', this.sheet('hero_r0'), 8);
     A('walkSide', this.sheet('hero_r1'), 8);
-    A('slash', this.sheet('hero_r2'), 18, 0);
+    A('slash', this.sheet('hero_r2'), 26, 0);
+    A('walkUp', this.sheet('hero2_r1'), 8);
+    A('walkFront', this.sheet('hero2_r0'), 8);
+    const pose = this.sheet('hero2_r2');
+    this.anims.create({ key: 'idle', frames: this.anims.generateFrameNumbers(pose, { frames: [2, 3] }), frameRate: 2.5, repeat: -1 });
+    this.anims.create({ key: 'hurtPose', frames: this.anims.generateFrameNumbers(pose, { frames: [0] }), frameRate: 1 });
+    // 이펙트 시트(검은 배경, ADD 블렌드로 검정이 투명): 베기 궤적, 타격 섬광, 죽음 연기
+    A('fxSlash', this.sheet('fx1_r0'), 32, 0);
+    A('fxHit', this.sheet('fx1_r1'), 30, 0);
+    A('fxSmoke', this.sheet('fx1_r2'), 16, 0);
+    A('fxCrit', this.sheet('fx2_r0'), 22, 0);
+    // 몬스터 피격(0번)·죽음(1~3번) 프레임
+    for (const [i, kind] of ['slime', 'skel', 'bat'].entries()) {
+      const sh = this.sheet('mob2_r' + i);
+      this.anims.create({ key: kind + 'Hurt', frames: this.anims.generateFrameNumbers(sh, { frames: [0] }), frameRate: 1 });
+      this.anims.create({ key: kind + 'Die', frames: this.anims.generateFrameNumbers(sh, { frames: [0, 1, 2, 3] }), frameRate: 14 });
+    }
     A('slime', this.sheet('mob_r0'), 6);
     A('skel', this.sheet('mob_r1'), 7);
     A('bat', this.sheet('mob_r2'), 10);
@@ -75,6 +91,10 @@ class Play extends Phaser.Scene {
       speed: { min: 40, max: 140 }, lifespan: { min: 150, max: 380 }, scale: { start: 1.5, end: 0 },
       tint: [0xffffff, 0xffe066, 0xff7b3a], emitting: false, depth: 8,
     });
+    this.dust = this.add.particles(0, 0, 'px', {
+      speedX: { min: -14, max: 14 }, speedY: { min: -18, max: -4 }, lifespan: 380, scale: { start: 2, end: 0 },
+      alpha: { start: 0.5, end: 0 }, tint: 0xc8bfa8, emitting: false, depth: 3,
+    });
     this.goo = this.add.particles(0, 0, 'px', {
       speed: { min: 30, max: 110 }, lifespan: 450, scale: { start: 2, end: 0.5 }, gravityY: 200,
       emitting: false, depth: 3,
@@ -91,7 +111,8 @@ class Play extends Phaser.Scene {
     this.makeHud();
     this.makeJoystick();
     this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT');
-    this.time.addEvent({ delay: 700, loop: true, callback: () => this.attack() });
+    this.fxs = this.add.group({ runChildUpdate: true });
+    this.time.addEvent({ delay: 650, loop: true, callback: () => this.attack() });
     this.time.addEvent({ delay: 260, loop: true, callback: () => this.spawn() });
     for (let i = 0; i < 40; i++) this.spawn(true);
     this.physics.add.collider(this.mobs, this.mobs);
@@ -135,6 +156,7 @@ class Play extends Phaser.Scene {
     const kind = Phaser.Math.RND.pick(['slime', 'slime', 'skel', 'bat']);
     const m = this.mobs.create(this.hero.x + Math.cos(a) * d, this.hero.y + Math.sin(a) * d, { slime: 'mob_r0s', skel: 'mob_r1s', bat: 'mob_r2s' }[kind]);
     m.play({ key: kind, startFrame: Phaser.Math.Between(0, 3) }).setDepth(4);
+    m.kind = kind;
     m.hp = { slime: 20, skel: 40, bat: 12 }[kind];
     m.spd = { slime: 28, skel: 22, bat: 48 }[kind];
     m.color = { slime: 0x6fe36a, skel: 0xe8e2c8, bat: 0xa45cff }[kind];
@@ -142,43 +164,70 @@ class Play extends Phaser.Scene {
   }
 
   attack() {
-    const dir = this.face;
-    this.hero.play('slash', true).once('animationcomplete', () => this.hero.play('walkSide'));
-    this.hero.setFlipX(dir < 0);
-    // 베기 궤적: 흰 초승달 2겹
-    const arc = this.add.graphics().setDepth(7).setPosition(this.hero.x + dir * 6, this.hero.y);
-    const pts = [];
-    for (let d = -70; d <= 70; d += 10) pts.push({ x: Math.cos(Phaser.Math.DegToRad(d)) * 46, y: Math.sin(Phaser.Math.DegToRad(d)) * 46 });
-    for (let d = 60; d >= -60; d -= 10) pts.push({ x: Math.cos(Phaser.Math.DegToRad(d)) * 36 + 4, y: Math.sin(Phaser.Math.DegToRad(d)) * 38 });
-    arc.fillStyle(0xffffff, 1).fillPoints(pts, true);
-    arc.setScale(dir, 1);
-    this.tweens.add({ targets: arc, alpha: 0, scaleX: dir * 1.15, scaleY: 1.15, duration: 160, onComplete: () => arc.destroy() });
-    let hit = 0;
-    this.mobs.getChildren().forEach(m => {
-      const dx = m.x - this.hero.x, dy = m.y - this.hero.y;
-      if (Math.hypot(dx, dy) < 52 && dx * dir > -8) { this.damage(m, Phaser.Math.Between(18, 34), Math.random() < 0.2); hit++; }
+    // 가장 가까운 적 쪽으로 몸을 돌리고 반 박자 내딛으며 벤다
+    let target = null, best = 80;
+    this.mobs.getChildren().forEach(m => { const d = Phaser.Math.Distance.Between(m.x, m.y, this.hero.x, this.hero.y); if (d < best) { best = d; target = m; } });
+    const ang = target ? Phaser.Math.Angle.Between(this.hero.x, this.hero.y, target.x, target.y) : (this.face > 0 ? 0 : Math.PI);
+    const dir = Math.cos(ang) >= 0 ? 1 : -1;
+    this.face = dir;
+    this.hero.setFlipX(dir < 0).play('slash', true);
+    this.hero.once('animationcomplete-slash', () => this.hero.play('idle'));
+    this.lunge = { x: Math.cos(ang) * 120, y: Math.sin(ang) * 120, t: 90 };
+
+    // 칼 궤적: 그린 4프레임 궤적을 공격 방향으로 돌려 몸 앞에 띄운다. 2번째 프레임(가장 꽉 찬 궤적)에 판정
+    const fx = this.add.sprite(this.hero.x + Math.cos(ang) * 22, this.hero.y - 4 + Math.sin(ang) * 18, 'fx1_r0s')
+      .setBlendMode(Phaser.BlendModes.ADD).setDepth(7).setAlpha(0.8).setScale(0.85).setRotation(ang).setFlipY(dir < 0).play('fxSlash');
+    fx.update = () => fx.setPosition(this.hero.x + Math.cos(ang) * 22, this.hero.y - 4 + Math.sin(ang) * 18);
+    this.fxs.add(fx);
+    fx.once('animationcomplete', () => fx.destroy());
+    this.time.delayedCall(45, () => this.strike(ang));
+  }
+
+  strike(ang) {
+    let hit = 0, crit = false;
+    this.mobs.getChildren().slice().forEach(m => {
+      const dx = m.x - this.hero.x, dy = m.y - this.hero.y, d = Math.hypot(dx, dy);
+      const off = Math.abs(Phaser.Math.Angle.Wrap(Math.atan2(dy, dx) - ang));
+      if (d < 56 && (off < 1.9 || d < 18)) { const c = Math.random() < 0.2; crit ||= c; this.damage(m, Phaser.Math.Between(18, 34), c); hit++; }
     });
-    if (hit) { this.hitstop = 45; this.cameras.main.shake(70, 0.004); }
+    if (hit) { this.hitstop = crit ? 85 : 55; this.cameras.main.shake(crit ? 110 : 60, crit ? 0.007 : 0.003); }
   }
 
   damage(m, dmg, crit) {
     if (crit) dmg *= 2;
     m.hp -= dmg;
     m.setTintFill(0xffffff);
-    this.time.delayedCall(60, () => m.active && m.clearTint());
-    const ang = Phaser.Math.Angle.Between(this.hero.x, this.hero.y, m.x, m.y);
-    m.x += Math.cos(ang) * 8; m.y += Math.sin(ang) * 8;
-    this.spark.explode(crit ? 14 : 6, m.x, m.y);
-    const t = this.add.text(m.x, m.y - 10, dmg, { fontFamily: 'G11', fontSize: crit ? '16px' : '11px', color: crit ? '#ffd23f' : '#ffffff', stroke: '#2a0a0a', strokeThickness: 3 })
-      .setOrigin(0.5).setDepth(25).setScale(1.6);
-    this.tweens.add({ targets: t, scale: 1, duration: 90, ease: 'Back.Out' });
-    this.tweens.add({ targets: t, y: t.y - 18, alpha: 0, delay: 250, duration: 350, onComplete: () => t.destroy() });
+    this.time.delayedCall(70, () => m.active && m.clearTint());
+    if (m.hp > 0) { m.play(m.kind + 'Hurt'); this.time.delayedCall(160, () => m.active && !m.dead && m.play(m.kind)); }
+    // 밀려남: 순간이동 대신 속도로 튕겨 나갔다가 줄어든다
+    const ang = Phaser.Math.Angle.Between(this.hero.x, this.hero.y, m.x, m.y), kb = crit ? 260 : 170;
+    m.setVelocity(Math.cos(ang) * kb, Math.sin(ang) * kb); m.kb = 140;
+    this.tweens.killTweensOf(m);
+    m.setScale(1);
+    this.tweens.add({ targets: m, scaleX: 1.35, scaleY: 0.7, duration: 50, yoyo: true, ease: 'Quad.Out' });
+    // 타격점 섬광: 노란 별 터짐 프레임, 치명타는 크게
+    const sx = m.x - Math.cos(ang) * 6, sy = m.y - Math.sin(ang) * 6;
+    this.add.sprite(sx, sy, 'fx1_r1s').setBlendMode(Phaser.BlendModes.ADD).setDepth(9)
+      .setScale(crit ? 1.15 : 0.75).setRotation(Phaser.Math.FloatBetween(0, 6.28)).play('fxHit')
+      .once('animationcomplete', function () { this.destroy(); });
+    if (crit) this.add.sprite(sx, sy, 'fx2_r0s').setBlendMode(Phaser.BlendModes.ADD).setDepth(9).play('fxCrit')
+      .once('animationcomplete', function () { this.destroy(); });
+    this.spark.explode(crit ? 14 : 6, sx, sy);
+    const t = this.add.text(m.x + Phaser.Math.Between(-6, 6), m.y - 14, dmg, { fontFamily: 'G11', fontSize: crit ? '16px' : '11px', color: crit ? '#ffd23f' : '#ffffff', stroke: '#2a0a0a', strokeThickness: 3 })
+      .setOrigin(0.5).setDepth(25).setScale(1.5);
+    this.tweens.add({ targets: t, scale: 1, duration: 120, ease: 'Back.Out' });
+    this.tweens.add({ targets: t, y: t.y - 16, alpha: 0, delay: 280, duration: 320, onComplete: () => t.destroy() });
     if (m.hp <= 0) {
-      this.goo.setParticleTint(m.color); this.goo.explode(12, m.x, m.y);
-      const ring = this.add.circle(m.x, m.y, 4).setStrokeStyle(2, 0xffffff).setDepth(8);
-      this.tweens.add({ targets: ring, radius: 18, alpha: 0, duration: 220, onComplete: () => ring.destroy() });
+      // 죽음: 몸은 바로 빼고, 그 자리에 쓰러지는 그림을 남긴다(흰 번쩍 → 무너짐 → 서서히 사라짐)
+      m.dead = true; this.kills++;
+      const c = this.add.sprite(m.x, m.y, m.texture.key).setFlipX(m.flipX).setDepth(3).setTintFill(0xffffff).play(m.kind + 'Die');
+      this.time.delayedCall(60, () => c.clearTint());
+      c.once('animationcomplete', () => this.tweens.add({ targets: c, alpha: 0, delay: 250, duration: 400, onComplete: () => c.destroy() }));
+      this.goo.setParticleTint(m.color); this.goo.explode(10, m.x, m.y);
+      this.add.sprite(m.x, m.y - 2, 'fx1_r2s').setBlendMode(Phaser.BlendModes.ADD).setDepth(8).setAlpha(0.35).setScale(0.5).setTint(m.color)
+        .play('fxSmoke').once('animationcomplete', function () { this.destroy(); });
       this.gems.create(m.x, m.y, 'gem').setDepth(3);
-      m.destroy(); this.kills++;
+      m.destroy();
     }
   }
 
@@ -188,7 +237,8 @@ class Play extends Phaser.Scene {
     this.hp = Math.max(5, this.hp - 6);
     this.hurtFx.setAlpha(0.28);
     this.tweens.add({ targets: this.hurtFx, alpha: 0, duration: 220 });
-    this.hero.setTintFill(0xff4444); this.time.delayedCall(80, () => this.hero.clearTint());
+    this.hero.setTint(0xff7070); this.time.delayedCall(90, () => this.hero.clearTint());
+    this.hurtUntil = this.time.now + 160; this.hero.play('hurtPose');
   }
 
   update(time, delta) {
@@ -199,20 +249,34 @@ class Play extends Phaser.Scene {
     if (k.W.isDown || k.UP.isDown) v.y = -1; if (k.S.isDown || k.DOWN.isDown) v.y = 1;
     if (this.autoMove) v.copy(this.autoMove(time));
     if (v.length() > 1) v.normalize();
-    this.hero.setVelocity(v.x * 70, v.y * 70);
-    const slashing = this.hero.anims.currentAnim?.key === 'slash' && this.hero.anims.isPlaying;
-    if (Math.abs(v.x) > 0.2) this.face = Math.sign(v.x);
+    let vx = v.x * 70, vy = v.y * 70;
+    if (this.lunge && this.lunge.t > 0) { vx += this.lunge.x; vy += this.lunge.y; this.lunge.t -= delta; }
+    this.hero.setVelocity(vx, vy);
+    const moving = v.length() > 0.1;
+    const slashing = (this.hero.anims.currentAnim?.key === 'slash' && this.hero.anims.isPlaying) || time < (this.hurtUntil || 0);
+    if (Math.abs(v.x) > 0.2 && !slashing) this.face = Math.sign(v.x);
     if (!slashing) {
-      if (v.length() < 0.1) this.hero.anims.pause();
-      else {
-        const key = Math.abs(v.x) >= Math.abs(v.y) ? 'walkSide' : 'walkDown';
-        if (this.hero.anims.currentAnim?.key !== key || !this.hero.anims.isPlaying) this.hero.play(key, true);
-        this.hero.setFlipX(key === 'walkSide' && this.face < 0);
-      }
+      // 위·아래로 갈 땐 앞·뒷모습, 그 밖엔 옆모습(좌우 뒤집기). 서 있으면 숨쉬는 자세
+      const want = !moving ? 'idle' : Math.abs(v.y) > Math.abs(v.x) * 1.3 ? (v.y < 0 ? 'walkUp' : 'walkFront') : 'walkSide';
+      if (this.hero.anims.currentAnim?.key !== want) this.hero.play(want);
+      this.hero.anims.timeScale = moving ? 0.6 + v.length() * 0.9 : 1;
+      this.hero.setFlipX(want === 'walkSide' || want === 'idle' ? this.face < 0 : false);
     }
-    this.heroShadow.setPosition(this.hero.x, this.hero.y + this.hero.height / 2 - 2);
+    // 걸을 때 위아래로 튀고 진행 방향으로 살짝 기울기, 서 있으면 숨쉬기
+    this.walkT = (this.walkT || 0) + delta * (moving ? 0.018 : 0.004);
+    const bob = moving ? Math.abs(Math.sin(this.walkT)) * 0.06 : 0;
+    this.hero.setOrigin(0.5, 0.5 + bob);
+    this.hero.setAngle(slashing ? 0 : v.x * 6);
+    this.hero.setScale(1, moving ? 1 : 1 + Math.sin(this.walkT) * 0.025);
+    if (moving && time - (this.lastDust || 0) > 170) {
+      this.lastDust = time;
+      this.dust.explode(3, this.hero.x - v.x * 6, this.hero.y + this.hero.height / 2 - 3);
+    }
+    this.heroShadow.setPosition(this.hero.x, this.hero.y + this.hero.height / 2 - 2).setScale(1 - bob * 2, 1);
     this.mobs.getChildren().forEach(m => {
-      this.physics.moveToObject(m, this.hero, m.spd);
+      if (m.dead) return;
+      if (m.kb > 0) { m.kb -= delta; m.body.velocity.scale(0.86); }
+      else this.physics.moveToObject(m, this.hero, m.spd);
       m.setFlipX(m.x > this.hero.x);
       m.setDepth(m.y > this.hero.y ? 6 : 4);
     });
